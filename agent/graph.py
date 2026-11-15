@@ -245,3 +245,35 @@ class RiskAnalyst:
         rec = out["record"]
         rec["latency_ms"] = int((time.time() - t0) * 1000)
         return rec
+
+
+def group_alerts(alerts: list[dict]) -> list[list[dict]]:
+    """Alerts of the same minute that are part of one market-wide move form ONE group (explained
+    once, by the coin that moved most); coin-specific alerts stay alone."""
+    by_minute: dict[int, list[dict]] = {}
+    for a in alerts:
+        by_minute.setdefault(int(a["ts"]), []).append(a)
+    groups: list[list[dict]] = []
+    for minute in sorted(by_minute):
+        wide, single = [], []
+        for a in by_minute[minute]:
+            f = market_facts_from_alert(a)
+            (wide if f and f["is_market_wide"] else single).append(a)
+        if wide:
+            wide.sort(key=lambda a: -abs(a.get("ret_5m_pct") or 0))
+            groups.append(wide)
+        groups += [[a] for a in single]
+    return groups
+
+
+def follower_record(leader_rec: dict, alert: dict) -> dict:
+    """Record for a coin that moved with a market-wide event explained once (no extra LLM call)."""
+    f = market_facts_from_alert(alert) or {}
+    lead = leader_rec["symbol"].replace("USDT", "")
+    return {**leader_rec,
+            "alert_id": alert.get("alert_id") or f"{alert['symbol']}-{alert['ts']}",
+            "symbol": alert["symbol"], "ts": int(alert["ts"]),
+            "ret_5m_pct": f.get("coin_ret_5m_pct"), "others_ret_5m_pct": f.get("others_ret_5m_pct"),
+            "anomaly_score": alert.get("anomaly_score"), "vol_forecast_60m_pct": alert.get("vol_forecast_60m_pct"),
+            "summary": f"Part of the market-wide move led by {lead}. " + leader_rec["summary"],
+            "grouped_with": leader_rec["alert_id"], "latency_ms": 0}

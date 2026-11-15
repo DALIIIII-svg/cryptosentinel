@@ -157,3 +157,18 @@ def test_build_alert_carries_every_coin_move():
     al = build_alert({**rows[0], "close": 1.0}, {"anomaly_score": 2, "anomaly_threshold": 1, "z_5m": -9, "vol_forecast_pct": 1},
                      moved)
     assert al["ret_5m_pct"] == pytest.approx(-5.824, abs=1e-3) and al["others_ret_5m_pct"] == pytest.approx(-8.607, abs=1e-3)
+
+
+def test_market_wide_alerts_of_one_minute_are_explained_once():
+    from agent.graph import follower_record, group_alerts
+    moved = {"BTCUSDT": -3.7, "ETHUSDT": -14.8, "SOLUSDT": -6.0, "XRPUSDT": -7.0}
+    wide = [{**alert(sym), "alert_id": sym, "ret_5m_pct": v, "coins_moved_5m_pct": moved} for sym, v in moved.items()]
+    solo = {**alert("XRPUSDT"), "alert_id": "solo", "ts": T + 3_600_000,
+            "coins_moved_5m_pct": {"XRPUSDT": -9.0, "BTCUSDT": 0.1, "ETHUSDT": -0.2}}
+    groups = group_alerts(wide + [solo])
+    assert [len(g) for g in groups] == [4, 1]
+    assert groups[0][0]["symbol"] == "ETHUSDT"       # the coin that moved most leads the group
+    leader = RiskAnalyst(FakeSource(True, NEWS)).explain(groups[0][0])
+    f = follower_record(leader, groups[0][1])
+    assert f["symbol"] != leader["symbol"] and f["cause"] == leader["cause"] and f["grouped_with"] == leader["alert_id"]
+    assert f["summary"].startswith("Part of the market-wide move led by ETH")
