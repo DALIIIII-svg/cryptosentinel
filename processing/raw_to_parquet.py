@@ -99,6 +99,8 @@ def process_news(done: set[str]) -> set[str]:
             else:
                 frame = news_frame_generic(chunk, dataset)
                 frame = frame[_in_period(frame["published_at"])]
+            if len(frame) and s.news_time_shift_minutes:
+                frame = frame.assign(published_at=frame["published_at"] + s.news_time_shift_minutes * 60_000)
             if len(frame):
                 upsert_news(frame)
                 total += len(frame)
@@ -145,7 +147,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rebuild", action="store_true", help="ignore the manifest and reprocess every raw file")
     ap.add_argument("--no-report", action="store_true")
+    ap.add_argument("--rebuild-news", action="store_true",
+                    help="delete processed news and rebuild it (after changing NEWS_TIME_SHIFT_MINUTES)")
     args = ap.parse_args()
+    if args.rebuild_news:
+        s = get_settings()
+        client = s3_client()
+        for key in list(list_keys("processed/news/")):
+            client.delete_object(Bucket=s.s3_bucket, Key=key)
+        write_manifest("news", set())
+        log.info("processed news deleted; rebuilding with a time shift of %d min", s.news_time_shift_minutes)
     for name, fn in (("klines", process_klines), ("news", process_news)):
         done = set() if args.rebuild else read_manifest(name)
         new = fn(done)

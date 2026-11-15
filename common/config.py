@@ -76,6 +76,10 @@ class Settings(BaseSettings):
         "/resolve/main/coindesk-crypto-news-2020-2025.csv"
     )
 
+    # Correction for the news dataset clock, in minutes (e.g. -210 if its times are 3.5 h late).
+    # Applied when raw news history is converted to Parquet (make parquet-news).
+    news_time_shift_minutes: int = 0
+
     # S3 sink
     sink_flush_seconds: int = 60
     sink_max_records: int = 5000

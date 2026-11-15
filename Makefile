@@ -7,7 +7,7 @@ PY      := $(VENV)/bin/python
 PIP     := $(VENV)/bin/pip
 
 .DEFAULT_GOAL := help
-.PHONY: help venv env up down ps logs init smoke test check reset collect collect-stop collect-logs report history parquet shocks replay newstime features features-live
+.PHONY: help venv env up down ps logs init smoke test check reset collect collect-stop collect-logs report history parquet shocks replay newstime features features-live parquet-news
 
 help:  ## List the commands
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  make %-8s %s\n", $$1, $$2}'
@@ -74,8 +74,11 @@ parquet:  ## Raw zone -> Parquet (deduplicated) + data quality report
 shocks:  ## Biggest shock EVENTS (market-wide / coin-specific) + news before -> eval/shock_events.csv
 	$(PY) -m processing.find_shocks --top 20
 
-newstime:  ## Check that news timestamps are UTC (hour profile + lag test against market moves)
+newstime:  ## Check that news timestamps are UTC (run `make shocks` first)
 	$(PY) -m processing.check_news_time
+
+parquet-news:  ## Rebuild processed news (after setting NEWS_TIME_SHIFT_MINUTES in .env.local)
+	$(PY) -m processing.raw_to_parquet --rebuild-news --no-report
 
 DAY   ?= 2024-08-05
 FROM  ?= 00:00

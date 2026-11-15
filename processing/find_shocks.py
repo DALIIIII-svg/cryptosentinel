@@ -4,8 +4,9 @@ A shock = a 5-minute log return far outside that coin's usual 5-minute moves (ro
 measured two ways:
   - raw:           the coin's own return            -> catches market-wide crashes
   - idiosyncratic: coin return minus market return  -> catches coin-specific moves
-Shocks of different coins within 10 minutes are grouped into ONE event, labelled:
-  - market-wide   : 3+ coins shocked, or the market moved at least half as much as the leader
+Shocks of different coins within 10 minutes are grouped into ONE event, labelled by how much the
+OTHER coins moved compared with the leader (market average excluding the leader):
+  - market-wide   : others moved at least 35 % as much as the leader, in the same direction
   - coin-specific : otherwise
 For each event: the leader coin, every coin hit, the market move, and the news of the hour before.
 
@@ -33,6 +34,7 @@ WINDOW_MIN = 5
 SEPARATION_MS = 6 * 3600 * 1000      # at most one shock per coin per 6 h
 CLUSTER_MS = 10 * 60 * 1000          # shocks of different coins within 10 min = same event
 NEWS_LEAD_MS = 60 * 60 * 1000
+WIDE_RATIO = 0.35                    # others moved >= 35 % of the leader's move -> market-wide
 
 
 def five_min_returns(klines: pd.DataFrame) -> pd.DataFrame:
@@ -51,6 +53,7 @@ def detect(klines: pd.DataFrame, top: int, min_z: float = 8.0, min_z_idio: float
     """One row per coin shock, strongest first (|z| of raw or idiosyncratic return)."""
     r5 = five_min_returns(klines)
     market = r5.mean(axis=1)
+    n_active = r5.notna().sum(axis=1)
     rows = []
     for sym in r5.columns:
         z_raw = robust_z(r5[sym])
@@ -70,6 +73,9 @@ def detect(klines: pd.DataFrame, top: int, min_z: float = 8.0, min_z_idio: float
                 "z": round(float(z_raw.get(t, 0.0)), 1),
                 "z_idio": round(float(z_idio.get(t, 0.0)), 1),
                 "market_ret_5m_pct": round(float(np.expm1(market.at[t])) * 100, 3),
+                # market move WITHOUT this coin (the plain mean includes the coin itself)
+                "others_ret_5m_pct": round(float(np.expm1(
+                    (market.at[t] * n_active.at[t] - r5.at[t, sym]) / max(int(n_active.at[t]) - 1, 1))) * 100, 3),
                 "score": float(score.at[t]),
             })
     out = pd.DataFrame(rows)
@@ -93,8 +99,10 @@ def group_events(shocks: pd.DataFrame) -> pd.DataFrame:
     events = []
     for _, g in s.groupby("event"):
         lead = g.loc[g["ret_5m_pct"].abs().idxmax()]
-        market = float(g["market_ret_5m_pct"].iloc[g["ret_5m_pct"].abs().argmax()])
-        wide = len(g) >= 3 or abs(market) >= 0.5 * abs(lead["ret_5m_pct"])
+        market = float(lead["market_ret_5m_pct"])
+        others = float(lead["others_ret_5m_pct"])
+        ratio = others / lead["ret_5m_pct"] if lead["ret_5m_pct"] else 0.0  # same sign -> positive
+        wide = ratio >= WIDE_RATIO
         events.append({
             "time_utc": lead["time_utc"],
             "end_ms": int(lead["end_ms"]),
@@ -102,6 +110,7 @@ def group_events(shocks: pd.DataFrame) -> pd.DataFrame:
             "leader": lead["symbol"],
             "leader_ret_5m_pct": lead["ret_5m_pct"],
             "market_ret_5m_pct": market,
+            "others_ret_5m_pct": others,
             "n_coins": len(g),
             "coins": " ".join(f"{r.symbol.replace('USDT', '')}:{r.ret_5m_pct:+.1f}%"
                               for r in g.sort_values("ret_5m_pct", key=abs, ascending=False).itertuples()),
@@ -150,7 +159,7 @@ def main() -> int:
     events.insert(0, "event_id", [f"E{i + 1:03d}" for i in range(len(events))])
     events.drop(columns=["end_ms", "score"]).to_csv("eval/shock_events.csv", index=False)
 
-    cols = ["event_id", "time_utc", "type", "leader", "leader_ret_5m_pct", "market_ret_5m_pct",
+    cols = ["event_id", "time_utc", "type", "leader", "leader_ret_5m_pct", "others_ret_5m_pct",
             "n_coins", "coin_news_60m", "all_news_60m"]
     with pd.option_context("display.width", 220, "display.max_colwidth", 70):
         for kind in ("market-wide", "coin-specific"):

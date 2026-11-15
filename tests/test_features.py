@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from processing.check_news_time import lag_correlations
+from processing.check_news_time import event_study, jump_start, lag_correlations
 from processing.features import (
     DAY_MIN, FEATURE_COLUMNS, MINUTE_MS, TARGET_COLUMN, FeatureState, add_target, compute_features, ready, regularize,
 )
@@ -83,14 +83,17 @@ def test_feature_ranges():
 def test_group_events_labels_market_wide_and_coin_specific():
     t = T0 + 3_600_000
     shocks = pd.DataFrame([
-        {"symbol": "BTCUSDT", "end_ms": t, "time_utc": t, "ret_5m_pct": -6.0, "market_ret_5m_pct": -7.0, "score": 50},
-        {"symbol": "ETHUSDT", "end_ms": t + 60_000, "time_utc": t, "ret_5m_pct": -9.0, "market_ret_5m_pct": -7.0, "score": 60},
-        {"symbol": "SOLUSDT", "end_ms": t + 120_000, "time_utc": t, "ret_5m_pct": -8.0, "market_ret_5m_pct": -7.0, "score": 55},
-        {"symbol": "XRPUSDT", "end_ms": t + 86_400_000, "time_utc": t, "ret_5m_pct": -9.0, "market_ret_5m_pct": -1.0, "score": 40},
+        {"symbol": "BTCUSDT", "end_ms": t, "time_utc": t, "ret_5m_pct": -6.0, "market_ret_5m_pct": -7.0, "others_ret_5m_pct": -7.1, "score": 50},
+        {"symbol": "ETHUSDT", "end_ms": t + 60_000, "time_utc": t, "ret_5m_pct": -9.0, "market_ret_5m_pct": -7.0, "others_ret_5m_pct": -6.8, "score": 60},
+        {"symbol": "SOLUSDT", "end_ms": t + 120_000, "time_utc": t, "ret_5m_pct": -8.0, "market_ret_5m_pct": -7.0, "others_ret_5m_pct": -6.9, "score": 55},
+        # many coins wobble with it, but the others barely moved -> still coin-specific
+        {"symbol": "XRPUSDT", "end_ms": t + 86_400_000, "time_utc": t, "ret_5m_pct": -9.0, "market_ret_5m_pct": -1.5, "others_ret_5m_pct": -0.7, "score": 40},
+        {"symbol": "ADAUSDT", "end_ms": t + 86_460_000, "time_utc": t, "ret_5m_pct": -3.0, "market_ret_5m_pct": -1.5, "others_ret_5m_pct": -1.3, "score": 10},
+        {"symbol": "DOGEUSDT", "end_ms": t + 86_520_000, "time_utc": t, "ret_5m_pct": -3.0, "market_ret_5m_pct": -1.5, "others_ret_5m_pct": -1.3, "score": 10},
     ])
     ev = group_events(shocks).set_index("leader")
     assert ev.loc["ETHUSDT", "type"] == "market-wide" and ev.loc["ETHUSDT", "n_coins"] == 3
-    assert ev.loc["XRPUSDT", "type"] == "coin-specific" and ev.loc["XRPUSDT", "n_coins"] == 1
+    assert ev.loc["XRPUSDT", "type"] == "coin-specific" and ev.loc["XRPUSDT", "n_coins"] == 3
 
 
 def test_lag_check_finds_a_known_shift():
@@ -103,3 +106,14 @@ def test_lag_check_finds_a_known_shift():
     shifted = pd.Series(true_news.values, index=hours - 5 * 3_600_000)  # clock 5 h early
     corr = lag_correlations(activity, shifted)
     assert max(corr, key=corr.get) == -4
+
+
+def test_event_study_detects_a_late_clock():
+    rng = np.random.default_rng(5)
+    events = [T0 + i * 7 * 86_400_000 for i in range(8)]
+    background = rng.integers(T0 - 86_400_000, T0 + 60 * 86_400_000, 20000)
+    def news_with_delay(delay_min):
+        burst = [e + (delay_min + int(x)) * 60_000 for e in events for x in rng.uniform(0, 120, 60)]
+        return pd.DataFrame({"published_at": np.r_[background, burst]})
+    assert jump_start(event_study(news_with_delay(5), events)) in (-30, 0)
+    assert 180 <= jump_start(event_study(news_with_delay(210), events)) <= 210  # clock 3.5 h late
