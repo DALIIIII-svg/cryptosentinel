@@ -1,0 +1,30 @@
+# Secrets and local config (keep the *.example files)
+.env
+.env.*
+!.env.example
+!.env.aws.example
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+*.egg-info/
+
+# Data and model artifacts (they live in S3 / SeaweedFS, not in Git)
+data/
+export/
+*.parquet
+*.csv.gz
+*.jsonl.gz
+models/
+*.tar.gz
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db

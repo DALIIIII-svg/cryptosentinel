@@ -1,0 +1,7 @@
+# Phase 1 dependencies. Later phases add their own lines here.
+confluent-kafka>=2.5,<3
+boto3>=1.34,<2
+pydantic-settings>=2.3,<3
+
+# Dev
+pytest>=8,<9

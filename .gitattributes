@@ -1,0 +1,8 @@
+# Keep Linux line endings in the repo, even when edited on Windows.
+# Shell scripts with Windows line endings fail inside WSL/Docker with "bad interpreter".
+* text=auto eol=lf
+*.sh text eol=lf
+Makefile text eol=lf
+*.png binary
+*.jpg binary
+*.pdf binary
