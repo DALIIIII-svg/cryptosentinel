@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from processing.check_news_time import event_study, jump_start, lag_correlations
+from processing.check_news_time import event_study, headline_delays, jump_start, lag_correlations, parse_level
 from processing.features import (
     DAY_MIN, FEATURE_COLUMNS, MINUTE_MS, TARGET_COLUMN, FeatureState, add_target, compute_features, ready, regularize,
 )
@@ -117,3 +117,19 @@ def test_event_study_detects_a_late_clock():
         return pd.DataFrame({"published_at": np.r_[background, burst]})
     assert jump_start(event_study(news_with_delay(5), events)) in (-30, 0)
     assert 180 <= jump_start(event_study(news_with_delay(210), events)) <= 210  # clock 3.5 h late
+
+
+def test_parse_level():
+    assert parse_level("Bitcoin crashes below $53K, wiping out $600M in leveraged longs") == (53000.0, "down")
+    assert parse_level("BTC tops $70,000 for the first time since March") == (70000.0, "up")
+    assert parse_level("Bitcoin ETF inflows reach $500M") is None
+    assert parse_level("Ethereum falls below $2,800") is None
+
+
+def test_headline_delays_measure_the_clock():
+    t = np.arange(48 * 60) * MINUTE_MS + T0
+    price = np.where(np.arange(len(t)) < 30 * 60, 60000.0, 52000.0)  # crosses below 53K at hour 30
+    btc = pd.DataFrame({"open_time": t, "low": price, "high": price})
+    cross = T0 + 30 * 3_600_000
+    news = pd.DataFrame({"title": ["Bitcoin falls below $53K"] * 2, "published_at": [cross + 20 * MINUTE_MS, cross + 210 * MINUTE_MS]})
+    assert headline_delays(news, btc).tolist() == [20.0, 210.0]
