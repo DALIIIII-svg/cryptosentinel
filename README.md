@@ -113,9 +113,9 @@ tests/        unit tests
 | 3 | History (Feb 2024 - Jan 2025), Parquet, shocks, replay | done — `make history parquet shocks` |
 | 4 | Features (shared live/offline module), training table | done — `make features` |
 | 5 | Models vs baselines, live scorer | done — `make train` |
-| 6 | Agent, dashboard | next |
+| 6 | Agent (LangGraph + Groq), evaluation, dashboard | done — `make demo-start` |
+| 7 | Migration to AWS (account A) | next |
 | 4 | Features | |
-| 7 | Migration to AWS (account A) | |
 | 8 | Rebuild in demo account B | |
 | 9 | Report, video, presentation | |
 
@@ -174,4 +174,33 @@ make train           # both models (a few minutes)
 make features-live   # terminal 1: prices.klines -> features.1m
 make score-live      # terminal 2: features.1m -> alerts.anomaly
 make replay DAY=2024-08-05 FROM=00:00 TO=04:00 SPEED=10   # terminal 3
+```
+
+## Agent and dashboard (Phase 6)
+
+**Agent** (`agent/graph.py`, LangGraph): `gather_context -> search_news -> classify (LLM) -> validate -> finalize`.
+Code gathers the facts (price path, the other coins' move, news from the hour BEFORE the move);
+the LLM picks one cause (`news_driven`, `market_wide`, `possible_manipulation`, `unexplained`), a
+confidence, a risk level, a 2-3 sentence summary and the news it relies on. Code then enforces the
+guardrails: citations must be news shown to it and published before the move, `news_driven` needs a
+valid citation, invalid answers get one retry, then a safe fallback. No trading advice.
+
+LLM: Groq free tier, `openai/gpt-oss-120b` by default (`LLM_PROVIDER` / `LLM_MODEL` in `.env.local`;
+`ollama` for a local model, `fake` for offline tests). Check it with `make llm-check`.
+
+**Demo (four terminals' worth of services, started in the background):**
+```bash
+make demo-start        # hot writer, live features, live scorer, agent (logs in logs/)
+make replay DAY=2024-08-05 FROM=00:00 TO=03:00 SPEED=20
+make dashboard         # http://localhost:8501 (prices + alerts, alert feed, volatility forecast)
+make demo-status       # last log line of each service
+make demo-stop
+```
+Explained alerts are printed in `logs/agent.log` (or emailed with `NOTIFIER=sns` on AWS).
+
+**Evaluation:**
+```bash
+make eval-agent         # agent on the 40 shock events -> eval/agent_outputs.csv + eval/labelled_events.csv
+#  -> open eval/labelled_events.csv, fill `true_cause` for each event from the headlines and the move
+make eval-agent-score   # accuracy vs your labels, baseline "always market_wide", faithfulness, latency
 ```

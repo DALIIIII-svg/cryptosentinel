@@ -15,9 +15,16 @@ numpy>=1.26,<3
 
 # Phase 5: models
 scikit-learn>=1.5,<2
-xgboost>=2.1,<4
+xgboost-cpu>=2.1,<4    # CPU-only build: no 200 MB GPU library
 scipy>=1.13,<2
 joblib>=1.4,<2
+
+# Phase 6: agent and dashboard
+langgraph>=0.3,<2
+langchain-core>=0.3,<2
+langchain-openai>=0.3,<2
+streamlit>=1.40,<2
+plotly>=5.24,<7
 
 # Dev
 pytest>=8,<9

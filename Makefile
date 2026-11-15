@@ -7,7 +7,7 @@ PY      := $(VENV)/bin/python
 PIP     := $(VENV)/bin/pip
 
 .DEFAULT_GOAL := help
-.PHONY: help venv env up down ps logs init smoke test check reset collect collect-stop collect-logs report history parquet shocks replay newstime features features-live parquet-news train train-vol train-anomaly score-live
+.PHONY: help venv env up down ps logs init smoke test check reset collect collect-stop collect-logs report history parquet shocks replay newstime features features-live parquet-news train train-vol train-anomaly score-live agent eval-agent eval-agent-score dashboard demo-start demo-stop demo-status llm-check
 
 help:  ## List the commands
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  make %-8s %s\n", $$1, $$2}'
@@ -105,3 +105,28 @@ train: train-vol train-anomaly  ## Both models
 
 score-live:  ## Live scoring: features.1m -> alerts.anomaly (start after features-live)
 	$(PY) -m processing.live_scorer
+
+# ---- Phase 6: agent, dashboard, demo -----------------------------------------
+llm-check:  ## Check the LLM answers (uses LLM_PROVIDER / LLM_MODEL / GROQ_API_KEY from .env.local)
+	$(PY) -m agent.check_llm
+
+agent:  ## Agent service: alerts.anomaly -> explanation -> DynamoDB + alerts.explained + notification
+	$(PY) -m agent.consumer
+
+eval-agent:  ## Run the agent on the shock events -> eval/agent_outputs.csv + labelling sheet
+	$(PY) -m eval.eval_agent --run
+
+eval-agent-score:  ## Score the agent against your labels in eval/labelled_events.csv
+	$(PY) -m eval.eval_agent --score
+
+dashboard:  ## Streamlit dashboard on http://localhost:8501
+	$(VENV)/bin/streamlit run dashboard/app.py --server.headless true
+
+demo-start:  ## Start hot writer, features, scorer and agent in the background (logs/)
+	bash scripts/demo.sh start
+
+demo-stop:  ## Stop the demo services
+	bash scripts/demo.sh stop
+
+demo-status:  ## Are the demo services running? (last log line of each)
+	bash scripts/demo.sh status

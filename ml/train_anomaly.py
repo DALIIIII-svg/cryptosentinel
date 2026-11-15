@@ -1,7 +1,7 @@
 """Anomaly detector: Isolation Forest vs the classic 'z > threshold' rule, at the SAME alert budget.
 
-Three detectors: the rule, the forest alone, and "combined" (the larger of the two, each on its
-own scale), which the live scorer uses. Each detector gets a threshold that produces ALERTS_PER_DAY alerts (all 10 coins together, after a
+Four detectors: the rule, the forest alone, "combined" (the larger of the two on a common scale) and
+"rule_first" (the rule with 8 of the 10 daily alerts OR the forest's 2 rarest cases), used live. Each detector gets a threshold that produces ALERTS_PER_DAY alerts (all 10 coins together, after a
 15-minute cooldown per coin) on the validation month. Then, on unseen months, we measure:
   1. recall on the real labelled shock events (eval/shock_events.csv) in Nov 2024 .. Jan 2025
   2. recall on planted anomalies (price jumps, pumps, volume bursts) in the test months
@@ -38,6 +38,7 @@ from processing.features import compute_features, ready
 
 log = get_logger("train_anomaly")
 ALERTS_PER_DAY = 10
+FOREST_SHARE = 2          # alerts/day the forest may add on top of the rule (live detector)
 TRAIN_SAMPLE = 300_000
 
 
@@ -50,6 +51,11 @@ def load_events(months: list[str]) -> pd.DataFrame:
     ev["end_ms"] = to_epoch_ms(ev["time_utc"])
     month = pd.to_datetime(ev["end_ms"], unit="ms", utc=True).dt.strftime("%Y-%m")
     return ev[month.isin(months)].reset_index(drop=True)
+
+
+def rule_first(rule: np.ndarray, forest: np.ndarray, thr: dict) -> np.ndarray:
+    """Score > 1 when the rule fires (rule threshold) OR the forest fires (its strict threshold)."""
+    return np.maximum(rule / thr["rule_first_rule"], forest / thr["rule_first_forest"])
 
 
 def score_frame(f: pd.DataFrame, model: IsolationForest) -> tuple[np.ndarray, np.ndarray]:
@@ -75,7 +81,10 @@ def main() -> int:
     v_comb = combined_score(v_rule, v_if, scale)
     thr = {"rule": threshold_for_budget(vt, vs, v_rule, ALERTS_PER_DAY),
            "iforest": threshold_for_budget(vt, vs, v_if, ALERTS_PER_DAY),
-           "combined": threshold_for_budget(vt, vs, v_comb, ALERTS_PER_DAY)}
+           "combined": threshold_for_budget(vt, vs, v_comb, ALERTS_PER_DAY),
+           # live detector: the rule with most of the budget, the forest only for its rarest cases
+           "rule_first_rule": threshold_for_budget(vt, vs, v_rule, ALERTS_PER_DAY - FOREST_SHARE),
+           "rule_first_forest": threshold_for_budget(vt, vs, v_if, FOREST_SHARE)}
     log.info("thresholds for %d alerts/day: rule |z| > %.2f, iforest > %.4f, combined > %.3f",
              ALERTS_PER_DAY, thr["rule"], thr["iforest"], thr["combined"])
 
@@ -87,8 +96,9 @@ def main() -> int:
         f = pd.concat([val, load_features(TEST_MONTHS, every=1)], ignore_index=True)
         t, sym = f["open_time"].to_numpy(), f["symbol"].to_numpy()
         r_s, i_s = score_frame(f, model)
-        for name, sc in (("rule", r_s), ("iforest", i_s), ("combined", combined_score(r_s, i_s, scale))):
-            al = alerts(t, sym, sc, thr[name])
+        for name, sc in (("rule", r_s), ("iforest", i_s), ("combined", combined_score(r_s, i_s, scale)),
+                         ("rule_first", rule_first(r_s, i_s, thr))):
+            al = alerts(t, sym, sc, 1.0 if name == "rule_first" else thr[name])
             hit = detected(events, al)
             for kind in ("market-wide", "coin-specific"):
                 m = (events["type"] == kind).to_numpy()
@@ -103,8 +113,9 @@ def main() -> int:
     f = ready(compute_features(k_inj))
     t, sym = f["open_time"].to_numpy(), f["symbol"].to_numpy()
     r_s, i_s = score_frame(f, model)
-    for name, sc in (("rule", r_s), ("iforest", i_s), ("combined", combined_score(r_s, i_s, scale))):
-        al = alerts(t, sym, sc, thr[name])
+    for name, sc in (("rule", r_s), ("iforest", i_s), ("combined", combined_score(r_s, i_s, scale)),
+                     ("rule_first", rule_first(r_s, i_s, thr))):
+        al = alerts(t, sym, sc, 1.0 if name == "rule_first" else thr[name])
         hit = detected(planted, al)
         for kind in INJECTION_TYPES:
             m = (planted["kind"] == kind).to_numpy()
@@ -123,7 +134,7 @@ def main() -> int:
     joblib.dump(model, MODELS_DIR / "anomaly_iforest.joblib")
     (MODELS_DIR / "anomaly_meta.json").write_text(json.dumps({
         "features": ANOMALY_FEATURES, "alerts_per_day": ALERTS_PER_DAY, "thresholds": thr, "scale": scale,
-        "live_detector": "combined",
+        "live_detector": "rule_first",
         "train_months": TRAIN_MONTHS, "val_months": VAL_MONTHS, "test_months": TEST_MONTHS,
         "results": res.to_dict("records"),
     }, indent=2))

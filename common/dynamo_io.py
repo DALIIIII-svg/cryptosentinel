@@ -3,6 +3,7 @@
 Tables (names get the TABLE_PREFIX, e.g. cryptosentinel-alerts):
   prices-hot : PK symbol (S), SK open_time (N)            TTL expires_at (48 h)
   news       : PK coin (S),   SK sk (S) = published_at#news_id   TTL expires_at (30 days)
+  forecasts  : PK symbol (S), SK open_time (N)            TTL expires_at (48 h)  - live scores
   alerts     : PK alert_id (S); GSI by-symbol on symbol (S) + ts (N)
 """
 from __future__ import annotations
@@ -38,6 +39,17 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
         "AttributeDefinitions": [
             {"AttributeName": "coin", "AttributeType": "S"},
             {"AttributeName": "sk", "AttributeType": "S"},
+        ],
+        "ttl_attribute": "expires_at",
+    },
+    "forecasts": {
+        "KeySchema": [
+            {"AttributeName": "symbol", "KeyType": "HASH"},
+            {"AttributeName": "open_time", "KeyType": "RANGE"},
+        ],
+        "AttributeDefinitions": [
+            {"AttributeName": "symbol", "AttributeType": "S"},
+            {"AttributeName": "open_time", "AttributeType": "N"},
         ],
         "ttl_attribute": "expires_at",
     },

@@ -13,6 +13,9 @@ import threading
 
 import numpy as np
 
+from common.aws_clients import dynamodb_resource
+from common.config import get_settings
+from common.dynamo_io import PRICES_HOT_TTL_SECONDS, to_dynamo
 from common.kafka_io import decode, make_consumer, make_producer, produce_json
 from common.log import get_logger
 from common.schemas import now_ms
@@ -56,6 +59,7 @@ def main() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
     scorer = get_scorer()
+    forecasts = dynamodb_resource().Table(get_settings().table_name("forecasts"))
     consumer = make_consumer("live-scorer", [FEATURES_1M.name], **{"auto.offset.reset": "latest"})
     producer = make_producer()
     last_alert: dict[str, int] = {}
@@ -69,6 +73,14 @@ def main() -> None:
             if feats:
                 result = scorer.score(feats).to_dict("records")
                 scored += len(feats)
+                # every score goes to the forecasts table (dashboard: forecast vs realised volatility)
+                with forecasts.batch_writer(overwrite_by_pkeys=["symbol", "open_time"]) as bw:
+                    for feat, sc in zip(feats, result):
+                        bw.put_item(Item=to_dynamo({
+                            "symbol": feat["symbol"], "open_time": int(feat["open_time"]),
+                            "close": feat.get("close"), "vol_forecast_pct": float(sc["vol_forecast_pct"]),
+                            "anomaly_score": float(sc["anomaly_score"]), "z_5m": float(sc["z_5m"]),
+                            "expires_at": now_ms() // 1000 + PRICES_HOT_TTL_SECONDS}))
                 for feat, sc in zip(feats, result):
                     if not sc["is_anomaly"]:
                         continue

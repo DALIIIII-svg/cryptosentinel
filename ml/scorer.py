@@ -5,7 +5,8 @@
 
 score(features) takes feature rows (dicts or a DataFrame from processing.features) and returns
 one row per input with:
-  anomaly_score, anomaly_threshold, is_anomaly   (combined detector, alert budget from training)
+  anomaly_score, anomaly_threshold, is_anomaly   (live detector "rule_first": the z-rule, plus the forest's
+                                                  rarest cases; alert budget from training)
   z_5m                                           (5-minute move in usual-move units, signed)
   iforest_score
   vol_forecast_pct                               (expected volatility over the next 60 min, in %)
@@ -38,8 +39,15 @@ class LocalScorer:
         self.vol = xgb.Booster()
         self.vol.load_model(d / "vol_xgb.json")
         self.vol_meta = json.loads((d / "vol_meta.json").read_text())
-        self.threshold = float(self.anomaly_meta["thresholds"]["combined"])
-        self.scale = self.anomaly_meta["scale"]
+        thr = self.anomaly_meta["thresholds"]
+        self.detector = self.anomaly_meta.get("live_detector", "combined")
+        if self.detector == "rule_first" and "rule_first_rule" in thr:
+            self.thr_rule, self.thr_forest = float(thr["rule_first_rule"]), float(thr["rule_first_forest"])
+            self.threshold = 1.0
+        else:
+            self.detector = "combined"
+            self.threshold = float(thr["combined"])
+        self.scale = self.anomaly_meta.get("scale", {})
 
     def score(self, rows) -> pd.DataFrame:
         f = rows if isinstance(rows, pd.DataFrame) else pd.DataFrame(list(rows))
@@ -47,7 +55,10 @@ class LocalScorer:
         a = anomaly_frame(f)
         rule = rule_score(a)
         forest = -self.forest.score_samples(a[ANOMALY_FEATURES].to_numpy(np.float32))
-        comb = combined_score(rule, forest, self.scale)
+        if self.detector == "rule_first":
+            comb = np.maximum(rule / self.thr_rule, forest / self.thr_forest)
+        else:
+            comb = combined_score(rule, forest, self.scale)
         x = np.column_stack([f[FEATURE_COLUMNS].to_numpy(np.float32), symbol_codes(f["symbol"]).astype(np.float32)])
         log_rv = self.vol.predict(xgb.DMatrix(x, feature_names=self.vol_meta["features"]))
         return pd.DataFrame({
