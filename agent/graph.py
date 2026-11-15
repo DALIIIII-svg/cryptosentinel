@@ -30,7 +30,7 @@ from common.log import get_logger
 
 log = get_logger("agent")
 NEWS_LOOKBACK_MS = 65 * 60_000         # the 5-minute move + the hour before it
-MAX_NEWS = 25
+MAX_NEWS = 15                           # keeps prompts small (free-tier token limits)
 WIDE_RATIO = 0.35                       # same rule as processing/find_shocks.py
 
 SYSTEM_PROMPT = """You are a crypto market risk analyst. A monitoring system detected an abnormal price
@@ -44,6 +44,9 @@ Causes (choose exactly one):
 - unexplained: none of the above is supported by the facts.
 
 Rules:
+- The numbers in FACTS are computed by code and are correct; never contradict them.
+- If market.is_market_wide is true, answer market_wide (or news_driven only if a cited item explains
+  the whole market's move). possible_manipulation requires a coin-specific move (is_market_wide false).
 - Cite only news ids from news_before_move (like "N3"), at most 3, and only if they support your cause.
 - Headlines that merely mention the coin are not a cause; prefer "unexplained" to guessing.
 - No trading advice, no price predictions.
@@ -88,6 +91,22 @@ def market_facts(candles: pd.DataFrame, symbol: str, t_end: int) -> dict:
     }
 
 
+def market_facts_from_alert(alert: dict) -> dict | None:
+    """The live scorer attaches every coin's 5-minute move computed from the SAME stream that
+    triggered the alert: preferred over re-reading candles (no race with the hot writer)."""
+    moved = alert.get("coins_moved_5m_pct") or {}
+    sym = alert["symbol"]
+    if sym not in moved or len(moved) < 2:
+        return None
+    own = float(moved[sym])
+    others = [float(v) for s, v in moved.items() if s != sym]
+    oth = sum(others) / len(others)
+    return {"coin_ret_5m_pct": round(own, 3), "others_ret_5m_pct": round(oth, 3),
+            "btc_ret_5m_pct": moved.get("BTCUSDT"),
+            "is_market_wide": bool(own != 0 and oth / own >= WIDE_RATIO),
+            "coins_moved": {s.replace("USDT", ""): v for s, v in moved.items()}}
+
+
 def price_path(candles: pd.DataFrame, symbol: str, t_end: int) -> dict:
     c = candles[(candles["symbol"] == symbol) & (candles["open_time"] < t_end)].sort_values("open_time")
     if c.empty:
@@ -126,6 +145,8 @@ class RiskAnalyst:
     def gather_context(self, state: AgentState) -> AgentState:
         a = state["alert"]
         t = int(a["ts"])
+        if hasattr(self.source, "wait_for"):          # live: let the hot writer catch up first
+            self.source.wait_for(a["symbol"], t - 60_000)
         candles = self.source.candles(t - 90 * 60_000, t)
         facts = {
             "symbol": a["symbol"],
@@ -134,8 +155,10 @@ class RiskAnalyst:
                      "z_score_5m": a.get("z_5m"), "volume_z": a.get("vol_z"),
                      "buy_sell_imbalance": a.get("imbalance"),
                      "expected_volatility_next_60m_pct": a.get("vol_forecast_60m_pct")},
-            "market": market_facts(candles, a["symbol"], t),
+            "market": market_facts_from_alert(a) or market_facts(candles, a["symbol"], t),
         }
+        if facts["market"].get("coin_ret_5m_pct") is not None:   # one source of truth for the move
+            facts["move"]["change_5m_pct"] = facts["market"]["coin_ret_5m_pct"]
         return {"facts": facts, "attempts": 0, "errors": []}
 
     def search_news(self, state: AgentState) -> AgentState:
@@ -150,7 +173,7 @@ class RiskAnalyst:
             ids[nid] = n
             listing.append({"id": nid, "minutes_before_move": round((t - int(n["published_at"])) / 60_000),
                             "source": n.get("source", ""), "title": n.get("title", ""),
-                            "summary": (n.get("summary") or "")[:200], "coins": list(n.get("coins") or [])})
+                            "summary": (n.get("summary") or "")[:140], "coins": list(n.get("coins") or [])})
         facts = {**state["facts"], "news_before_move": listing}
         return {"facts": facts, "news": items, "news_ids": ids}
 

@@ -31,8 +31,23 @@ def pct(log_ret) -> float | None:
     return None if log_ret is None else round(float(np.expm1(log_ret)) * 100, 3)
 
 
-def build_alert(feat: dict, sc: dict) -> dict:
+def coins_moved(rows: list[dict]) -> dict[int, dict[str, float]]:
+    """{open_time: {symbol: 5-min move in %}} from the feature rows of a batch."""
+    out: dict[int, dict[str, float]] = {}
+    for f in rows:
+        v = pct(f.get("ret_5m"))
+        if v is not None:
+            out.setdefault(int(f["open_time"]), {})[f["symbol"]] = v
+    return out
+
+
+def build_alert(feat: dict, sc: dict, moved: dict[str, float] | None = None) -> dict:
+    moved = moved or {}
+    own = moved.get(feat["symbol"], pct(feat.get("ret_5m")))
+    others = [v for s, v in moved.items() if s != feat["symbol"]]
     return {
+        "coins_moved_5m_pct": moved,
+        "others_ret_5m_pct": round(sum(others) / len(others), 3) if others else None,
         "alert_id": f"{feat['symbol']}-{feat['open_time']}",
         "symbol": feat["symbol"],
         "ts": int(feat["open_time"]) + 60_000,           # end of the minute that triggered
@@ -41,7 +56,7 @@ def build_alert(feat: dict, sc: dict) -> dict:
         "anomaly_score": round(float(sc["anomaly_score"]), 3),
         "threshold": round(float(sc["anomaly_threshold"]), 3),
         "z_5m": round(float(sc["z_5m"]), 2),
-        "ret_5m_pct": pct(feat.get("ret_5m")),
+        "ret_5m_pct": own,
         "ret_15m_pct": pct(feat.get("ret_15m")),
         "market_ret_5m_pct": pct(feat.get("mkt_ret_5m")),
         "idio_ret_5m_pct": pct(feat.get("idio_ret_5m")),
@@ -73,6 +88,7 @@ def main() -> None:
             if feats:
                 result = scorer.score(feats).to_dict("records")
                 scored += len(feats)
+                moved_by_minute = coins_moved(feats)
                 # every score goes to the forecasts table (dashboard: forecast vs realised volatility)
                 with forecasts.batch_writer(overwrite_by_pkeys=["symbol", "open_time"]) as bw:
                     for feat, sc in zip(feats, result):
@@ -88,7 +104,7 @@ def main() -> None:
                     if sym in last_alert and t - last_alert[sym] < COOLDOWN_MS:
                         continue
                     last_alert[sym] = t
-                    alert = build_alert(feat, sc)
+                    alert = build_alert(feat, sc, moved_by_minute.get(t))
                     produce_json(producer, ALERTS_ANOMALY.name, sym, alert)
                     sent += 1
                     log.info("ALERT %s at %s: 5-min move %+.2f%% (z %+.1f), market %+.2f%%, score %.2f",

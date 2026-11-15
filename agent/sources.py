@@ -58,6 +58,18 @@ class DynamoSource:
         self.news_t = db.Table(s.table_name("news"))
         self.symbols = s.symbol_list
 
+    def wait_for(self, symbol: str, open_time: int, timeout_s: float = 20.0) -> bool:
+        """Wait until the hot writer has stored the candle `open_time` of `symbol` (or time out)."""
+        import time
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            r = self.prices.query(KeyConditionExpression=Key("symbol").eq(symbol) & Key("open_time").gte(open_time),
+                                  Limit=1).get("Items", [])
+            if r:
+                return True
+            time.sleep(0.5)
+        return False
+
     def candles(self, t0: int, t1: int) -> pd.DataFrame:
         rows = []
         for sym in self.symbols:

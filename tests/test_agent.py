@@ -140,3 +140,20 @@ def test_rule_first_scorer(tmp_path, tiny_models):
     rows.iloc[-1, rows.columns.get_loc("ret_5m")] = 0.2
     out = sc.score(rows)
     assert sc.detector == "rule_first" and out["is_anomaly"].tolist() == [False, False, True]
+
+
+def test_market_facts_come_from_the_alert_when_present():
+    # candles say "flat" (hot writer behind) but the alert carries the real moves of every coin
+    src = FakeSource(crash_all=False, news=[])
+    a = {**alert("BTCUSDT"), "coins_moved_5m_pct": {"BTCUSDT": -6.0, "ETHUSDT": -9.0, "SOLUSDT": -8.0, "XRPUSDT": -7.0}}
+    rec = RiskAnalyst(src).explain(a)
+    assert rec["ret_5m_pct"] == -6.0 and rec["is_market_wide"] and rec["cause"] == "market_wide"
+
+
+def test_build_alert_carries_every_coin_move():
+    from processing.live_scorer import build_alert, coins_moved
+    rows = [{"symbol": "BTCUSDT", "open_time": 0, "ret_5m": -0.06}, {"symbol": "ETHUSDT", "open_time": 0, "ret_5m": -0.09}]
+    moved = coins_moved(rows)[0]
+    al = build_alert({**rows[0], "close": 1.0}, {"anomaly_score": 2, "anomaly_threshold": 1, "z_5m": -9, "vol_forecast_pct": 1},
+                     moved)
+    assert al["ret_5m_pct"] == pytest.approx(-5.824, abs=1e-3) and al["others_ret_5m_pct"] == pytest.approx(-8.607, abs=1e-3)
