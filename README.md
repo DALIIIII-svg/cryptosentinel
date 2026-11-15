@@ -18,6 +18,8 @@ SUP'COM — INDP3 AIM module (Data Engineering, ML & AI Agents). Team: Mohamed A
 
 Prerequisites: Docker Engine (or Docker Desktop) with `docker compose`, Python 3.10+, `make`.
 
+Easiest: `bash scripts/setup_wsl.sh` checks Docker, installs what is missing and runs everything below.
+
 ```bash
 make venv        # create .venv and install dependencies
 make env         # create .env.local from .env.example (then add your free Groq key)
