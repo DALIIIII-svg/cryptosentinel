@@ -56,8 +56,20 @@ class Settings(BaseSettings):
     binance_ws_url: str = "wss://data-stream.binance.vision"
     binance_rest_url: str = "https://data-api.binance.vision"
 
-    # News
+    # News: "name|url" pairs separated by commas
+    news_feeds: str = (
+        "coindesk|https://www.coindesk.com/arc/outboundfeeds/rss/?outputType=xml,"
+        "cointelegraph|https://cointelegraph.com/rss,"
+        "decrypt|https://decrypt.co/feed,"
+        "theblock|https://www.theblock.co/rss.xml"
+    )
+    news_poll_seconds: int = 120
     cryptopanic_token: str | None = None
+    cryptopanic_url: str = "https://cryptopanic.com/api/developer/v2/posts/"
+
+    # S3 sink
+    sink_flush_seconds: int = 60
+    sink_max_records: int = 5000
 
     # LLM
     llm_provider: str = "groq"
@@ -87,6 +99,17 @@ class Settings(BaseSettings):
     @property
     def symbol_list(self) -> list[str]:
         return [s.strip().upper() for s in self.symbols.split(",") if s.strip()]
+
+    @property
+    def feed_list(self) -> list[tuple[str, str]]:
+        """[('coindesk', 'https://...'), ...]"""
+        out = []
+        for part in self.news_feeds.split(","):
+            if "|" in part:
+                name, url = part.split("|", 1)
+                if name.strip() and url.strip():
+                    out.append((name.strip(), url.strip()))
+        return out
 
     @property
     def is_local(self) -> bool:

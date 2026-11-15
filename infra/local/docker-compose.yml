@@ -87,6 +87,48 @@ services:
       - dynamodb-data:/home/dynamodblocal/data
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # Phase 2 collectors. Started only with the "collect" profile:  make collect
+  # They read .env.local, then point at the other containers by name.
+  # restart: unless-stopped -> they come back after a crash or a Docker restart.
+  # ---------------------------------------------------------------------------
+  price-producer:
+    <<: &app
+      build:
+        context: ../..
+        dockerfile: infra/local/Dockerfile.app
+      image: cryptosentinel-app:latest
+      env_file: ../../.env.local
+      environment:
+        KAFKA_BOOTSTRAP: kafka:29092
+        S3_ENDPOINT_URL: http://seaweedfs:8333
+        DYNAMO_ENDPOINT_URL: http://dynamodb-local:8000
+      depends_on:
+        kafka:
+          condition: service_healthy
+      restart: unless-stopped
+      profiles: ["collect"]
+      logging:
+        driver: json-file
+        options: {max-size: "10m", max-file: "3"}
+    container_name: cs-price-producer
+    command: ["python", "-m", "producers.price_producer"]
+
+  news-producer:
+    <<: *app
+    container_name: cs-news-producer
+    command: ["python", "-m", "producers.news_producer"]
+
+  s3-sink:
+    <<: *app
+    container_name: cs-s3-sink
+    command: ["python", "-m", "processing.s3_sink"]
+
+  hot-writer:
+    <<: *app
+    container_name: cs-hot-writer
+    command: ["python", "-m", "processing.hot_writer"]
+
 volumes:
   kafka-data:
   seaweed-data:

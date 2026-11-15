@@ -40,6 +40,27 @@ make test        # unit tests
 
 `make down` stops the stack and keeps the data; `make reset` deletes all local data.
 
+## Data collection (Phase 2)
+
+```bash
+make collect        # build and start the 4 collectors in Docker (restart automatically)
+make collect-logs   # watch them work (Ctrl+C quits the view, not the collectors)
+make report         # files in S3, latest candle per coin, news per coin
+make collect-stop   # stop collecting
+```
+
+| Collector | Reads | Writes |
+| --- | --- | --- |
+| `price-producer` | Binance WebSocket `data-stream.binance.vision` (closed 1-min candles, 10 coins) + REST gap fill | Kafka `prices.klines` |
+| `news-producer` | RSS: CoinDesk, Cointelegraph, Decrypt, The Block (+ CryptoPanic if `CRYPTOPANIC_TOKEN` is set), every 2 min | Kafka `news.raw` |
+| `s3-sink` | `prices.klines`, `news.raw` | `raw/{topic}/dt=.../hour=.../*.jsonl.gz` every 60 s |
+| `hot-writer` | `prices.klines`, `news.raw` | DynamoDB `prices-hot` (48 h) and `news` (30 days) |
+
+Leave the laptop on (sleep disabled, Docker Desktop running) for 1-2 weeks: this gives real prices and
+real news side by side, which the agent evaluation needs. After a sleep or restart, `make collect`
+again; the price producer re-fetches the missed candles (up to the last 120 minutes on a restart,
+everything since the last candle on a reconnect).
+
 ## Repository layout
 
 ```
@@ -62,8 +83,8 @@ tests/        unit tests
 | --- | --- | --- |
 | 0 | Setup, day-1 AWS checks | scripts ready in `infra/aws/day1/` — to run |
 | 1 | Local infrastructure | done — run `make check` |
-| 2 | Ingestion (prices, news, S3 sink) | next |
-| 3 | History backfill + batch processing | |
+| 2 | Ingestion (prices, news, S3 sink, DynamoDB) | done — run `make collect`, then leave it 1-2 weeks |
+| 3 | History backfill + batch processing | next |
 | 4 | Features | |
 | 5 | Models and baselines | |
 | 6 | Agent, replay, dashboard | |

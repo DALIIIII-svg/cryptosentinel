@@ -7,7 +7,7 @@ PY      := $(VENV)/bin/python
 PIP     := $(VENV)/bin/pip
 
 .DEFAULT_GOAL := help
-.PHONY: help venv env up down ps logs init smoke test check reset
+.PHONY: help venv env up down ps logs init smoke test check reset collect collect-stop collect-logs report
 
 help:  ## List the commands
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  make %-8s %s\n", $$1, $$2}'
@@ -27,8 +27,8 @@ up:  ## Start Kafka, Kafbat UI, SeaweedFS and DynamoDB Local
 	  if [ "$$(docker inspect -f '{{.State.Health.Status}}' cs-kafka 2>/dev/null)" = "healthy" ]; then echo "Kafka is up."; exit 0; fi; \
 	  sleep 3; done; echo "Kafka did not become healthy: run 'make logs'"; exit 1
 
-down:  ## Stop the stack (data is kept)
-	$(COMPOSE) down
+down:  ## Stop everything, collectors included (data is kept)
+	$(COMPOSE) --profile collect down
 
 ps:  ## Show container status
 	$(COMPOSE) ps
@@ -48,4 +48,18 @@ test:  ## Run the unit tests (no Docker needed)
 check: up init smoke  ## up + init + smoke in one go
 
 reset:  ## DANGER: stop the stack and delete all local data
-	$(COMPOSE) down -v
+	$(COMPOSE) --profile collect down -v
+
+# ---- Phase 2: data collection ------------------------------------------------
+collect: up init  ## Build and start the 4 collectors in Docker (they keep running)
+	$(COMPOSE) --profile collect up -d --build price-producer news-producer s3-sink hot-writer
+	@echo "Collectors started. Check them with: make collect-logs   and   make report"
+
+collect-stop:  ## Stop the 4 collectors (Kafka and storage keep running)
+	$(COMPOSE) --profile collect stop price-producer news-producer s3-sink hot-writer
+
+collect-logs:  ## Follow the collectors' logs (Ctrl+C to quit, they keep running)
+	$(COMPOSE) --profile collect logs -f --tail=30 price-producer news-producer s3-sink hot-writer
+
+report:  ## How is collection going? Files in S3, latest candle per coin, news per coin
+	$(PY) -m processing.collection_report
