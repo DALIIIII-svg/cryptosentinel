@@ -109,7 +109,9 @@ def test_hot_items():
     k = kline_from_ws(WS_EVENT)
     p = price_item(k)
     assert p["symbol"] == "BTCUSDT" and p["open_time"] == 1731690000000
-    assert p["expires_at"] == 1731690059 + 48 * 3600
+    # TTL counts from storage time, so old (replayed) candles are not deleted immediately
+    from common.schemas import now_ms
+    assert p["expires_at"] >= now_ms() // 1000 + 48 * 3600 - 5
     n = {"news_id": "abc", "published_at": 1794758400000, "title": "t", "url": "u", "source": "s", "coins": []}
     items = news_items(n)
     assert len(items) == 1 and items[0]["coin"] == "MARKET"

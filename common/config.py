@@ -67,6 +67,15 @@ class Settings(BaseSettings):
     cryptopanic_token: str | None = None
     cryptopanic_url: str = "https://cryptopanic.com/api/developer/v2/posts/"
 
+    # Historical period used for training, evaluation and replay demos (inclusive months)
+    history_start: str = "2024-02"
+    history_end: str = "2025-01"
+    binance_history_url: str = "https://data.binance.vision"
+    news_dataset_url: str = (
+        "https://huggingface.co/datasets/maryamfakhari/crypto-news-coindesk-2020-2025"
+        "/resolve/main/coindesk-crypto-news-2020-2025.csv"
+    )
+
     # S3 sink
     sink_flush_seconds: int = 60
     sink_max_records: int = 5000
@@ -109,6 +118,17 @@ class Settings(BaseSettings):
                 name, url = part.split("|", 1)
                 if name.strip() and url.strip():
                     out.append((name.strip(), url.strip()))
+        return out
+
+    @property
+    def history_months(self) -> list[str]:
+        """['2024-02', '2024-03', ..., '2025-01']"""
+        y, m = map(int, self.history_start.split("-"))
+        ey, em = map(int, self.history_end.split("-"))
+        out = []
+        while (y, m) <= (ey, em):
+            out.append(f"{y:04d}-{m:02d}")
+            y, m = (y + 1, 1) if m == 12 else (y, m + 1)
         return out
 
     @property

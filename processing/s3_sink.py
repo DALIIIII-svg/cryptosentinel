@@ -86,7 +86,9 @@ def main() -> None:
         while not stop.is_set():
             msg = consumer.poll(1.0)
             if msg is not None and not msg.error():
-                batcher.add(msg.topic(), decode(msg.value()))
+                record = decode(msg.value())
+                if not record.get("replay"):  # replayed history is already stored
+                    batcher.add(msg.topic(), record)
             elif msg is not None and msg.error():
                 log.warning("kafka error: %s", msg.error())
             if batcher.due():

@@ -56,10 +56,34 @@ make collect-stop   # stop collecting
 | `s3-sink` | `prices.klines`, `news.raw` | `raw/{topic}/dt=.../hour=.../*.jsonl.gz` every 60 s |
 | `hot-writer` | `prices.klines`, `news.raw` | DynamoDB `prices-hot` (48 h) and `news` (30 days) |
 
-Leave the laptop on (sleep disabled, Docker Desktop running) for 1-2 weeks: this gives real prices and
-real news side by side, which the agent evaluation needs. After a sleep or restart, `make collect`
-again; the price producer re-fetches the missed candles (up to the last 120 minutes on a restart,
-everything since the last candle on a reconnect).
+Live mode is optional: run it while you work or during the demo. Training, evaluation and the
+demo itself use the historical period below. After a sleep or restart, `make collect` again; the price
+producer re-fetches missed candles (last 120 minutes on a restart, everything since the last candle on
+a reconnect).
+
+## Historical data, Parquet and replay (Phase 3)
+
+The project works on a fixed, volatile period: **February 2024 to January 2025** (March 2024 all-time
+high, 5 August 2024 crash, November 2024 election rally). Change it with `HISTORY_START` / `HISTORY_END`.
+
+| Source | What | Where it lands |
+| --- | --- | --- |
+| Binance public data (`data.binance.vision`) | 1-minute candles, 10 coins, 12 monthly files each, checksum verified | `raw/history/klines/` |
+| [CoinDesk crypto news 2020-2025](https://huggingface.co/datasets/maryamfakhari/crypto-news-coindesk-2020-2025) (Hugging Face, CC BY-NC 4.0, academic use) | ~229k articles from several outlets, timestamps to the second | `raw/history/news/coindesk_hf/` |
+| Optional: [CryptoVision](https://data.mendeley.com/datasets/wvjjxr8bxx) (Mendeley, CC BY 4.0) | 188k articles 2017-2025; download by hand, then `python -m processing.backfill_history --only news --extra-news cryptovision=path.csv` | `raw/history/news/cryptovision/` |
+
+Only the headline, a 300-character summary and the link of each article reach the processed zone.
+
+```bash
+make history        # download everything into S3 raw (resumable; ~25 MB of candles + 240 MB news file)
+make parquet        # raw -> processed Parquet, deduplicated, + data quality report
+make shocks         # biggest price shocks + news in the hour before -> eval/shock_candidates.csv
+make replay DAY=2024-08-05 FROM=00:00 TO=04:00 SPEED=10   # replay history into Kafka
+```
+
+Replay publishes to the same Kafka topics as the live producers, marked `"replay": true`
+(the S3 sink ignores those, everything downstream treats them as live). `--rebase` shifts the
+timestamps so the replay looks like it is happening now.
 
 ## Repository layout
 
@@ -83,8 +107,9 @@ tests/        unit tests
 | --- | --- | --- |
 | 0 | Setup, day-1 AWS checks | scripts ready in `infra/aws/day1/` — to run |
 | 1 | Local infrastructure | done — run `make check` |
-| 2 | Ingestion (prices, news, S3 sink, DynamoDB) | done — run `make collect`, then leave it 1-2 weeks |
-| 3 | History backfill + batch processing | next |
+| 2 | Live ingestion (prices, news, S3 sink, DynamoDB) | done — optional live mode: `make collect` |
+| 3 | History (Feb 2024 - Jan 2025), Parquet, shocks, replay | done — `make history parquet shocks` |
+| 4 | Features | next |
 | 4 | Features | |
 | 5 | Models and baselines | |
 | 6 | Agent, replay, dashboard | |

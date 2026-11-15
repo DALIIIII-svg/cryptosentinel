@@ -18,6 +18,7 @@ from common.config import get_settings
 from common.dynamo_io import NEWS_TTL_SECONDS, PRICES_HOT_TTL_SECONDS, to_dynamo
 from common.kafka_io import decode, make_consumer
 from common.log import get_logger
+from common.schemas import now_ms
 from common.topics import NEWS_RAW, PRICES_KLINES
 
 log = get_logger("hot_writer")
@@ -28,8 +29,11 @@ PRICE_FIELDS = ("open", "high", "low", "close", "volume", "quote_volume", "n_tra
 
 def price_item(k: dict[str, Any]) -> dict[str, Any]:
     item = {"symbol": k["symbol"], "open_time": k["open_time"]}
+    if k.get("replay"):
+        item["replay"] = True
     item.update({f: k[f] for f in PRICE_FIELDS if f in k})
-    item["expires_at"] = k["close_time"] // 1000 + PRICES_HOT_TTL_SECONDS
+    # TTL counts from when we store it, so replayed history is not deleted at once
+    item["expires_at"] = max(k["close_time"] // 1000, now_ms() // 1000) + PRICES_HOT_TTL_SECONDS
     return to_dynamo(item)
 
 
@@ -41,8 +45,9 @@ def news_items(n: dict[str, Any]) -> list[dict[str, Any]]:
         "summary": n.get("summary", ""),
         "url": n["url"],
         "source": n["source"],
-        "coins": n.get("coins", []),
-        "expires_at": n["published_at"] // 1000 + NEWS_TTL_SECONDS,
+        "coins": list(n.get("coins") or []),
+        "time_precision": n.get("time_precision") or "second",
+        "expires_at": max(n["published_at"] // 1000, now_ms() // 1000) + NEWS_TTL_SECONDS,
     }
     if n.get("votes"):
         base["votes"] = n["votes"]

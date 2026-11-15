@@ -8,5 +8,10 @@ websockets>=13,<17
 requests>=2.31,<3
 feedparser>=6.0,<7
 
+# Phase 3: history, Parquet
+pandas>=2.2,<4
+pyarrow>=16,<25
+numpy>=1.26,<3
+
 # Dev
 pytest>=8,<9

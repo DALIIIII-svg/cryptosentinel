@@ -7,7 +7,7 @@ PY      := $(VENV)/bin/python
 PIP     := $(VENV)/bin/pip
 
 .DEFAULT_GOAL := help
-.PHONY: help venv env up down ps logs init smoke test check reset collect collect-stop collect-logs report
+.PHONY: help venv env up down ps logs init smoke test check reset collect collect-stop collect-logs report history parquet shocks replay
 
 help:  ## List the commands
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  make %-8s %s\n", $$1, $$2}'
@@ -63,3 +63,20 @@ collect-logs:  ## Follow the collectors' logs (Ctrl+C to quit, they keep running
 
 report:  ## How is collection going? Files in S3, latest candle per coin, news per coin
 	$(PY) -m processing.collection_report
+
+# ---- Phase 3: history, Parquet, shocks, replay ---------------------------------
+history:  ## Download 12 months of Binance candles + the news dataset into S3 raw (resumable)
+	$(PY) -m processing.backfill_history
+
+parquet:  ## Raw zone -> Parquet (deduplicated) + data quality report
+	$(PY) -m processing.raw_to_parquet
+
+shocks:  ## List the biggest price shocks with the news before them -> eval/shock_candidates.csv
+	$(PY) -m processing.find_shocks --top 40
+
+DAY   ?= 2024-08-05
+FROM  ?= 00:00
+TO    ?= 04:00
+SPEED ?= 10
+replay:  ## Replay history into Kafka, e.g. make replay DAY=2024-08-05 FROM=00:00 TO=04:00 SPEED=10
+	$(PY) -m replay.replay --start "$(DAY) $(FROM)" --end "$(DAY) $(TO)" --speed $(SPEED)
