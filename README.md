@@ -112,9 +112,9 @@ tests/        unit tests
 | 2 | Live ingestion (prices, news, S3 sink, DynamoDB) | done — optional live mode: `make collect` |
 | 3 | History (Feb 2024 - Jan 2025), Parquet, shocks, replay | done — `make history parquet shocks` |
 | 4 | Features (shared live/offline module), training table | done — `make features` |
-| 5 | Models and baselines | next |
+| 5 | Models vs baselines, live scorer | done — `make train` |
+| 6 | Agent, dashboard | next |
 | 4 | Features | |
-| 6 | Agent, replay, dashboard | |
 | 7 | Migration to AWS (account A) | |
 | 8 | Rebuild in demo account B | |
 | 9 | Report, video, presentation | |
@@ -152,4 +152,26 @@ no feature looks into the future.
 ```bash
 make features        # processed/features/month=YYYY-MM/data.parquet (about 4.4M rows)
 make features-live   # live: prices.klines -> features.1m; start it before `make replay`
+```
+
+## Models (Phase 5)
+
+Fixed time split, never shuffled: **train** Feb-Oct 2024, **validation** Nov 2024, **test** Dec 2024 - Jan 2025.
+
+**Volatility forecaster** (`make train-vol`): predicts log realised volatility of the next 60 minutes.
+XGBoost on the 19 features is compared with naive persistence, HAR-RV and GARCH(1,1) on RMSE,
+QLIKE and R2 (test months). Output: `eval/results_vol.csv`, `models/vol_xgb.json`.
+
+**Anomaly detector** (`make train-anomaly`): the classic rule (5-minute move in standard deviations),
+an Isolation Forest on 9 volatility-normalised features, and "combined" (the larger of the two on a
+common scale, used live). All three get a threshold giving **10 alerts/day for all coins** on the
+validation month, then are compared on unseen months by recall on the real shock events and on
+planted anomalies (price jumps, pumps, volume bursts). Output: `eval/results_anomaly.csv`.
+On AWS the Isolation Forest is replaced by SageMaker Random Cut Forest with the same features.
+
+```bash
+make train           # both models (a few minutes)
+make features-live   # terminal 1: prices.klines -> features.1m
+make score-live      # terminal 2: features.1m -> alerts.anomaly
+make replay DAY=2024-08-05 FROM=00:00 TO=04:00 SPEED=10   # terminal 3
 ```

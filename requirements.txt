@@ -13,5 +13,11 @@ pandas>=2.2,<4
 pyarrow>=16,<25
 numpy>=1.26,<3
 
+# Phase 5: models
+scikit-learn>=1.5,<2
+xgboost>=2.1,<4
+scipy>=1.13,<2
+joblib>=1.4,<2
+
 # Dev
 pytest>=8,<9

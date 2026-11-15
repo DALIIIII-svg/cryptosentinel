@@ -7,7 +7,7 @@ PY      := $(VENV)/bin/python
 PIP     := $(VENV)/bin/pip
 
 .DEFAULT_GOAL := help
-.PHONY: help venv env up down ps logs init smoke test check reset collect collect-stop collect-logs report history parquet shocks replay newstime features features-live parquet-news
+.PHONY: help venv env up down ps logs init smoke test check reset collect collect-stop collect-logs report history parquet shocks replay newstime features features-live parquet-news train train-vol train-anomaly score-live
 
 help:  ## List the commands
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  make %-8s %s\n", $$1, $$2}'
@@ -93,3 +93,15 @@ features:  ## Build the training table: processed/features/month=.../data.parque
 
 features-live:  ## Live features: prices.klines -> features.1m (start it BEFORE make replay)
 	$(PY) -m processing.feature_consumer
+
+# ---- Phase 5: models ----------------------------------------------------------
+train-vol:  ## Volatility forecaster vs naive / HAR-RV / GARCH -> eval/results_vol.csv, models/
+	$(PY) -m ml.train_vol
+
+train-anomaly:  ## Anomaly detector vs z-rule at the same alert budget -> eval/results_anomaly.csv
+	$(PY) -m ml.train_anomaly
+
+train: train-vol train-anomaly  ## Both models
+
+score-live:  ## Live scoring: features.1m -> alerts.anomaly (start after features-live)
+	$(PY) -m processing.live_scorer

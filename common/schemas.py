@@ -156,3 +156,11 @@ def news_item(*, source: str, title: str, url: str, published_at: int | None,
 def struct_time_to_ms(st: time.struct_time | None) -> int | None:
     """feedparser gives UTC struct_time in *_parsed fields."""
     return timegm(st) * 1000 if st else None
+
+
+def to_epoch_ms(values) -> "pd.Series":
+    """Datetimes or date strings -> UTC epoch milliseconds, whatever the pandas time resolution
+    (pandas 3 may store times in microseconds, so `.astype('int64')` is not safe)."""
+    import pandas as pd
+    ts = pd.to_datetime(values, utc=True)
+    return ((ts - pd.Timestamp("1970-01-01", tz="UTC")) // pd.Timedelta(milliseconds=1)).astype("int64")
