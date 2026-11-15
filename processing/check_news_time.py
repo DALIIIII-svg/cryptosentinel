@@ -15,6 +15,8 @@
    "BTC tops $70,000" is compared with the minute the real BTC price first crossed that level.
    Typical delay 0..2 h = clock right; about +N h for all of them = clock N h late; negative = early.
 5. Headlines around the 5 August 2024 crash, with their timestamps, for a human check.
+6. Clock correction scan: tries corrections from -6 h to +1 h and keeps the one that puts the
+   most "Bitcoin below/above $X" headlines within an hour after the real price crossing.
 
 Run:  python -m processing.check_news_time       (or: make newstime)
 """
@@ -152,6 +154,48 @@ def headline_delays(news: pd.DataFrame, btc: pd.DataFrame, lookback_h: int = 24)
     return pd.Series(out, dtype=float)
 
 
+def crossing_times(btc: pd.DataFrame, level: float, direction: str, lo_ms: int, hi_ms: int) -> np.ndarray:
+    """Minutes (open_time) in [lo_ms, hi_ms) where BTC crosses `level` in `direction`
+    (down: previous low above, this low at/below; up: previous high below, this high at/above)."""
+    w = btc[(btc["open_time"] >= lo_ms) & (btc["open_time"] < hi_ms)]
+    if len(w) < 2:
+        return np.array([], dtype="int64")
+    if direction == "down":
+        x = w["low"].to_numpy()
+        hit = (x[1:] <= level) & (x[:-1] > level)
+    else:
+        x = w["high"].to_numpy()
+        hit = (x[1:] >= level) & (x[:-1] < level)
+    return w["open_time"].to_numpy()[1:][hit]
+
+
+def shift_scan(news: pd.DataFrame, btc: pd.DataFrame, shifts=range(-360, 61, 15),
+               window: tuple[int, int] = (0, 60)) -> pd.Series:
+    """For each candidate clock correction S (minutes added to news times), the share of BTC level
+    headlines published within `window` minutes AFTER the most recent real crossing of their level.
+    The S with the highest share is the best estimate of the correction to apply."""
+    btc = btc.sort_values("open_time")
+    items = []
+    for _, r in news.iterrows():
+        parsed = parse_level(r["title"])
+        if not parsed:
+            continue
+        h = int(r["published_at"])
+        cr = crossing_times(btc, parsed[0], parsed[1], h - 18 * 3_600_000, h + 8 * 3_600_000)
+        if len(cr):
+            items.append((h, cr))
+    out = {}
+    for sft in shifts:
+        good = 0
+        for h, cr in items:
+            t = h + sft * 60_000
+            before = cr[cr <= t]
+            if len(before) and window[0] <= (t - before[-1]) / 60_000 <= window[1]:
+                good += 1
+        out[sft] = good / len(items) if items else 0.0
+    return pd.Series(out, name=f"{len(items)} headlines")
+
+
 KEYWORDS = r"crash|plung|tumbl|sell-?off|liquidat|nikkei|japan|carry trade|bloodbath|slump|dump|drop|below"
 
 
@@ -215,13 +259,19 @@ def main() -> int:
     for _, r in near.head(40).iterrows():
         print(f"   {pd.to_datetime(r['published_at'], unit='ms', utc=True):%m-%d %H:%M}  {r['title'][:110]}")
 
-    if med is None:
-        print("\nVerdict: not enough evidence; send me this output.")
-        return 2
-    ok = -15 <= med <= 150 and (delays < -30).mean() < 0.2
-    print("\nVerdict:", f"timestamps look like UTC (headlines come a median {med:.0f} min after the price move)."
-          if ok else f"the clock looks shifted by about {med:+.0f} min: send me this output.")
-    return 0 if ok else 2
+    scan = shift_scan(news, btc)
+    best_shift = int(scan.idxmax())
+    print(f"\n6. Clock correction scan ({scan.name}): share of headlines within 0-60 min after the latest crossing")
+    for sft, share in scan.items():
+        mark = "  <- best" if sft == best_shift else ""
+        print(f"   shift {sft:+5d} min ({sft / 60:+.2f} h)  {share:6.1%}  {'#' * int(share * 150)}{mark}")
+    gain = scan.max() - scan.get(0, 0.0)
+    if abs(best_shift) <= 15 or gain < 0.03:
+        print("\nVerdict: timestamps look like UTC. Keep NEWS_TIME_SHIFT_MINUTES=0.")
+        return 0
+    print(f"\nVerdict: the news clock is off. Put NEWS_TIME_SHIFT_MINUTES={best_shift} in .env.local, "
+          "then run `make parquet-news` and `make newstime` again.")
+    return 2
 
 
 if __name__ == "__main__":

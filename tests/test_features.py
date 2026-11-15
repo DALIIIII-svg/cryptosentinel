@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from processing.check_news_time import event_study, headline_delays, jump_start, lag_correlations, parse_level
+from processing.check_news_time import event_study, headline_delays, jump_start, lag_correlations, parse_level, shift_scan
 from processing.features import (
     DAY_MIN, FEATURE_COLUMNS, MINUTE_MS, TARGET_COLUMN, FeatureState, add_target, compute_features, ready, regularize,
 )
@@ -133,3 +133,21 @@ def test_headline_delays_measure_the_clock():
     cross = T0 + 30 * 3_600_000
     news = pd.DataFrame({"title": ["Bitcoin falls below $53K"] * 2, "published_at": [cross + 20 * MINUTE_MS, cross + 210 * MINUTE_MS]})
     assert headline_delays(news, btc).tolist() == [20.0, 210.0]
+
+
+def test_shift_scan_recovers_a_210_minute_offset():
+    rng = np.random.default_rng(11)
+    n = 30 * 24 * 60
+    t = np.arange(n) * MINUTE_MS + T0
+    price = 60000 * np.exp(np.cumsum(rng.normal(0, 0.0015, n)))
+    btc = pd.DataFrame({"open_time": t, "low": price * 0.999, "high": price * 1.001})
+    titles, times = [], []
+    for i in rng.choice(np.arange(24 * 60, n - 600), 300, replace=False):
+        level = round(float(btc["low"].iloc[i]) / 1000) * 1000 - 500
+        cr = btc[(btc["open_time"] > t[i]) & (btc["low"] <= level)]
+        if len(cr):
+            real = int(cr["open_time"].iloc[0]) + int(rng.uniform(5, 40)) * MINUTE_MS
+            titles.append(f"Bitcoin falls below ${level:,.0f}")
+            times.append(real + 210 * MINUTE_MS)  # dataset clock 3.5 h late
+    scan = shift_scan(pd.DataFrame({"title": titles, "published_at": times}), btc, shifts=range(-300, 31, 30))
+    assert scan.idxmax() == -210 or scan.idxmax() == -180 or scan.idxmax() == -240
