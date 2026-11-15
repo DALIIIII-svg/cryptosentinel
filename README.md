@@ -77,11 +77,13 @@ Only the headline, a 300-character summary and the link of each article reach th
 ```bash
 make history        # download everything into S3 raw (resumable; ~25 MB of candles + 240 MB news file)
 make parquet        # raw -> processed Parquet, deduplicated, + data quality report
-make shocks         # biggest price shocks + news in the hour before -> eval/shock_candidates.csv
+make shocks         # shock EVENTS (market-wide / coin-specific) + news before -> eval/shock_events.csv
+make newstime       # check that news timestamps are UTC (must say "look like UTC")
 make replay DAY=2024-08-05 FROM=00:00 TO=04:00 SPEED=10   # replay history into Kafka
 ```
 
-Replay publishes to the same Kafka topics as the live producers, marked `"replay": true`
+Replay first sends the 25 hours before the window instantly (marked `"warmup": true`) so live
+features are complete from the first replayed minute. Replay publishes to the same Kafka topics as the live producers, marked `"replay": true`
 (the S3 sink ignores those, everything downstream treats them as live). `--rebase` shifts the
 timestamps so the replay looks like it is happening now.
 
@@ -109,9 +111,9 @@ tests/        unit tests
 | 1 | Local infrastructure | done — run `make check` |
 | 2 | Live ingestion (prices, news, S3 sink, DynamoDB) | done — optional live mode: `make collect` |
 | 3 | History (Feb 2024 - Jan 2025), Parquet, shocks, replay | done — `make history parquet shocks` |
-| 4 | Features | next |
+| 4 | Features (shared live/offline module), training table | done — `make features` |
+| 5 | Models and baselines | next |
 | 4 | Features | |
-| 5 | Models and baselines | |
 | 6 | Agent, replay, dashboard | |
 | 7 | Migration to AWS (account A) | |
 | 8 | Rebuild in demo account B | |
@@ -129,3 +131,25 @@ tests/        unit tests
 | Teacher OK with Kafka on EC2 instead of MSK? | | |
 | Teacher OK with Groq if Bedrock is blocked? | | |
 | CryptoPanic free plan still available? | | |
+
+## Features (Phase 4)
+
+`processing/features.py` is the single feature module: the training table and the live consumer
+both call it, and `tests/test_features.py` proves live and offline values are identical and that
+no feature looks into the future.
+
+| Feature | Meaning |
+| --- | --- |
+| `ret_1m`, `ret_5m`, `ret_15m`, `ret_60m` | log returns over the last 1 / 5 / 15 / 60 minutes |
+| `rv_5`, `rv_15`, `rv_60`, `rv_1d` | realised volatility over 5 min ... 1 day |
+| `vol_z`, `trades_z` | volume / trade count compared with the last 24 h (z-score) |
+| `imbalance` | buy vs sell pressure, -1 .. +1 |
+| `range_pct` | candle high-low range |
+| `mkt_ret_1m`, `mkt_ret_5m`, `mkt_rv_15`, `idio_ret_5m` | market move and the coin-specific part |
+| `hour_sin`, `hour_cos`, `filled` | time of day; 1 if the candle was missing |
+| `y_log_rv_next_60` (target) | log realised volatility of the NEXT 60 minutes (training only) |
+
+```bash
+make features        # processed/features/month=YYYY-MM/data.parquet (about 4.4M rows)
+make features-live   # live: prices.klines -> features.1m; start it before `make replay`
+```

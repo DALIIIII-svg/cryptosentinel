@@ -6,6 +6,10 @@ same topics as the live producers (prices.klines, news.raw), waiting between eve
 SPEED x real time is respected. News from the 60 minutes BEFORE the window are sent at the
 start, so the agent has the context that existed at that moment.
 
+Warm-up: features need 24 h of history, so the candles of the WARMUP_HOURS (25) before the
+window are sent first, instantly, marked "warmup": true. The feature consumer only buffers
+them; nothing is scored or explained for warm-up candles.
+
 Every replayed record carries "replay": true. The S3 sink ignores them (no duplicate history);
 the hot writer, features and agent treat them like live data.
 
@@ -32,25 +36,30 @@ from common.topics import NEWS_RAW, PRICES_KLINES
 
 log = get_logger("replay")
 NEWS_LEAD_MS = 60 * 60 * 1000
+WARMUP_HOURS = 25
 
 
 def parse_utc(text: str) -> int:
     return int(pd.Timestamp(text, tz="UTC").value // 1_000_000)
 
 
-def months_between(start_ms: int, end_ms: int) -> list[str]:
-    first = pd.to_datetime(start_ms - NEWS_LEAD_MS, unit="ms")
+def months_between(start_ms: int, end_ms: int, warmup_ms: int = 0) -> list[str]:
+    first = pd.to_datetime(start_ms - max(NEWS_LEAD_MS, warmup_ms), unit="ms")
     last = pd.to_datetime(end_ms, unit="ms")
     return list(pd.period_range(first, last, freq="M").strftime("%Y-%m"))
 
 
-def build_events(klines: pd.DataFrame, news: pd.DataFrame, start_ms: int, end_ms: int) -> list[tuple[int, str, str, dict]]:
-    """[(event_time_ms, topic, key, record)] sorted by time. News before `start_ms` get time = start_ms."""
+def build_events(klines: pd.DataFrame, news: pd.DataFrame, start_ms: int, end_ms: int,
+                 warmup_ms: int = 0) -> list[tuple[int, str, str, dict]]:
+    """[(event_time_ms, topic, key, record)] sorted by time. News before `start_ms` get time = start_ms.
+    Candles in [start - warmup, start) are included with "warmup": true."""
     events = []
-    k = klines[(klines["open_time"] >= start_ms) & (klines["open_time"] < end_ms)]
+    k = klines[(klines["open_time"] >= start_ms - warmup_ms) & (klines["open_time"] < end_ms)]
     for rec in k.to_dict("records"):
         rec = {key: (v.item() if hasattr(v, "item") else v) for key, v in rec.items()}
         rec.update(is_closed=True, replay=True)
+        if rec["open_time"] < start_ms:
+            rec["warmup"] = True
         events.append((int(rec["close_time"]) + 1, PRICES_KLINES.name, rec["symbol"], rec))
     n = news[(news["published_at"] >= start_ms - NEWS_LEAD_MS) & (news["published_at"] < end_ms)]
     for rec in n.to_dict("records"):
@@ -81,11 +90,20 @@ def run(events, speed: float, stop: threading.Event, producer=None, sleep=time.s
     producer = producer or make_producer()
     if not events:
         return 0
-    t0_event, t0_wall = events[0][0], time.monotonic()
+    paced = [e for e in events if not e[3].get("warmup")]
+    t0_event, t0_wall = (paced[0][0] if paced else events[0][0]), None
     sent = 0
     for t, topic, key, rec in events:
         if stop.is_set():
             break
+        if rec.get("warmup"):
+            produce_json(producer, topic, key, rec)  # warm-up: no waiting
+            sent += 1
+            continue
+        if t0_wall is None:
+            producer.flush(30)
+            log.info("warm-up sent (%d candles); starting the paced replay", sent)
+            t0_wall = time.monotonic()
         if speed > 0:
             wait = (t - t0_event) / 1000 / speed - (time.monotonic() - t0_wall)
             if wait > 0:
@@ -107,6 +125,8 @@ def main() -> int:
     ap.add_argument("--speed", type=float, default=10.0, help="x real time; 0 = no waiting")
     ap.add_argument("--rebase", action="store_true", help="shift times so the window starts now")
     ap.add_argument("--symbols", help="comma list, default = all configured symbols")
+    ap.add_argument("--warmup-hours", type=float, default=WARMUP_HOURS,
+                    help="candles sent instantly before the window so features are complete (0 = none)")
     args = ap.parse_args()
 
     s = get_settings()
@@ -115,19 +135,21 @@ def main() -> int:
         log.error("--end must be after --start")
         return 1
     symbols = [x.strip().upper() for x in args.symbols.split(",")] if args.symbols else s.symbol_list
-    months = months_between(start_ms, end_ms)
+    warmup_ms = int(args.warmup_hours * 3_600_000)
+    months = months_between(start_ms, end_ms, warmup_ms)
     klines, news = load_klines(symbols, months), load_news(months)
-    events = build_events(klines, news, start_ms, end_ms)
+    events = build_events(klines, news, start_ms, end_ms, warmup_ms)
     if not events:
         log.error("nothing to replay in that window: did you run `make history` and `make parquet`?")
         return 1
     if args.rebase:
         events = rebase(events, start_ms, now_ms())
-    n_k = sum(1 for e in events if e[1] == PRICES_KLINES.name)
+    n_k = sum(1 for e in events if e[1] == PRICES_KLINES.name and not e[3].get("warmup"))
     minutes = (end_ms - start_ms) / 60_000
     pace = f"{args.speed:g}x real time (about {minutes / args.speed:.1f} min)" if args.speed else "full speed"
-    log.info("replaying %d candles and %d news items (%.0f min of history) at %s",
-             n_k, len(events) - n_k, minutes, pace)
+    n_n = sum(1 for e in events if e[1] == NEWS_RAW.name)
+    log.info("replaying %d candles and %d news items (%.0f min of history) at %s, after a %.0f h warm-up",
+             n_k, n_n, minutes, pace, args.warmup_hours)
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())

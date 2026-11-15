@@ -7,7 +7,7 @@ PY      := $(VENV)/bin/python
 PIP     := $(VENV)/bin/pip
 
 .DEFAULT_GOAL := help
-.PHONY: help venv env up down ps logs init smoke test check reset collect collect-stop collect-logs report history parquet shocks replay
+.PHONY: help venv env up down ps logs init smoke test check reset collect collect-stop collect-logs report history parquet shocks replay newstime features features-live
 
 help:  ## List the commands
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  make %-8s %s\n", $$1, $$2}'
@@ -71,8 +71,11 @@ history:  ## Download 12 months of Binance candles + the news dataset into S3 ra
 parquet:  ## Raw zone -> Parquet (deduplicated) + data quality report
 	$(PY) -m processing.raw_to_parquet
 
-shocks:  ## List the biggest price shocks with the news before them -> eval/shock_candidates.csv
-	$(PY) -m processing.find_shocks --top 40
+shocks:  ## Biggest shock EVENTS (market-wide / coin-specific) + news before -> eval/shock_events.csv
+	$(PY) -m processing.find_shocks --top 20
+
+newstime:  ## Check that news timestamps are UTC (hour profile + lag test against market moves)
+	$(PY) -m processing.check_news_time
 
 DAY   ?= 2024-08-05
 FROM  ?= 00:00
@@ -80,3 +83,10 @@ TO    ?= 04:00
 SPEED ?= 10
 replay:  ## Replay history into Kafka, e.g. make replay DAY=2024-08-05 FROM=00:00 TO=04:00 SPEED=10
 	$(PY) -m replay.replay --start "$(DAY) $(FROM)" --end "$(DAY) $(TO)" --speed $(SPEED)
+
+# ---- Phase 4: features --------------------------------------------------------
+features:  ## Build the training table: processed/features/month=.../data.parquet (+ target)
+	$(PY) -m processing.build_features
+
+features-live:  ## Live features: prices.klines -> features.1m (start it BEFORE make replay)
+	$(PY) -m processing.feature_consumer
