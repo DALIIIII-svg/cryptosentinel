@@ -267,7 +267,7 @@ def main() -> int:
         print(f"   shift {sft:+5d} min ({sft / 60:+.2f} h)  {share:6.1%}  {'#' * int(share * 150)}{mark}")
     gain = scan.max() - scan.get(0, 0.0)
     if abs(best_shift) <= 15 or gain < 0.03:
-        print("\nVerdict: timestamps look like UTC. Keep NEWS_TIME_SHIFT_MINUTES=0.")
+        print("\nVerdict: timestamps line up with prices. No further correction needed: keep your current NEWS_TIME_SHIFT_MINUTES.")
         return 0
     print(f"\nVerdict: the news clock is off. Put NEWS_TIME_SHIFT_MINUTES={best_shift} in .env.local, "
           "then run `make parquet-news` and `make newstime` again.")
